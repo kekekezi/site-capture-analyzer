@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Site Capture Analyzer</title>
+    <script type="module" src="/src/popup/popup.ts"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">&gt;_</span>
+          <h1>&#32593;&#31449;&#35760;&#24405;&#22120;</h1>
+        </div>
+        <div class="hero-actions">
+          <button id="settings" class="icon-button" title="&#35774;&#32622;" aria-label="&#35774;&#32622;">&#9881;</button>
+          <span id="status" class="status">idle</span>
+        </div>
+      </header>
+      <section class="warning">
+        <span class="warning-icon" aria-hidden="true">!</span>
+        <span>&#23548;&#20986;&#25991;&#20214;&#21487;&#33021;&#21253;&#21547; <b>Cookie&#12289;Token&#12289;&#35831;&#27714;&#20307;&#12289;&#21709;&#24212;&#20307;&#21644;&#36755;&#20837;&#20869;&#23481;</b>&#12290;</span>
+      </section>
+      <dl class="stats">
+        <div class="stat-card stat-green"><dt><span class="stat-icon">&#9889;</span>&#20107;&#20214;</dt><dd id="eventCount">0</dd></div>
+        <div class="stat-card stat-cyan"><dt><span class="stat-icon">&#9636;</span>&#35831;&#27714;</dt><dd id="requestCount">0</dd></div>
+        <div class="stat-card stat-purple"><dt><span class="stat-icon">&#9635;</span>Tab</dt><dd id="tabCount">0</dd></div>
+        <div class="stat-card stat-blue"><dt><span class="stat-icon">&#9678;</span>&#25130;&#22270;</dt><dd id="screenshotCount">0</dd></div>
+      </dl>
+      <div class="actions">
+        <button id="start"><span class="btn-icon">&#9654;</span><span>&#24320;&#22987;</span></button>
+        <button id="stop"><span class="btn-icon">&#9632;</span><span>&#20572;&#27490;</span></button>
+        <button id="export"><span class="btn-icon">&#8679;</span><span>&#23548;&#20986;</span></button>
+        <button id="clear"><span class="btn-icon">&#9003;</span><span>&#28165;&#38500;</span></button>
+      </div>
+      <button id="viewer" class="wide"><span class="btn-icon">&#8599;</span><span>&#25171;&#24320;&#26597;&#30475;&#22120;</span></button>
+      <p id="message" class="message"></p>
+    </main>
+  </body>
+</html>

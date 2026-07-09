@@ -1,0 +1,29 @@
+node_modules/
+.pnpm-store/
+dist/
+
+# Local capture exports and sensitive test output
+测试/
+site-capture-sensitive-*.zip
+site-capture-sensitive-*/
+*.har
+
+# Logs and local environment
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.*
+
+# Local agent/workspace metadata
+.agents/
+.codex/
+.gitmeta/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

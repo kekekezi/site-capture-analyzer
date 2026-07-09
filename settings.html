@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>网站记录器设置</title>
+    <script type="module" src="/src/settings/settings.ts"></script>
+  </head>
+  <body>
+    <main class="settings-shell">
+      <header class="settings-hero">
+        <div>
+          <span class="eyebrow">SITE CAPTURE</span>
+          <h1>设置</h1>
+        </div>
+        <span id="saveStatus" class="save-status">已同步</span>
+      </header>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>导出设置</h2>
+          <p>控制导出包是否保留敏感信息。</p>
+        </div>
+        <label class="field">
+          <span>导出模式</span>
+          <select id="exportMode">
+            <option value="full">完整保留</option>
+            <option value="redacted">自动脱敏</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>自动停止保护</h2>
+          <p>防止忘记暂停导致录制无休止增长。填 0 表示不限制。</p>
+        </div>
+        <div class="limit-grid">
+          <label><span>最长时长（分钟）</span><input id="maxDurationMinutes" type="number" min="0" max="1440" step="1" /></label>
+          <label><span>最大事件数</span><input id="maxEvents" type="number" min="0" max="100000" step="100" /></label>
+          <label><span>最大截图数</span><input id="maxScreenshots" type="number" min="0" max="2000" step="1" /></label>
+          <label><span>空闲停止（分钟）</span><input id="idleTimeoutMinutes" type="number" min="0" max="1440" step="1" /></label>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Site Capture Viewer</title>
+    <script type="module" src="/src/viewer/viewer.ts"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>&#32593;&#31449;&#35760;&#24405;&#26597;&#30475;&#22120;</h1>
+        <input id="file" type="file" accept=".zip" />
+      </header>
+      <section id="summary" class="summary"></section>
+      <section class="grid">
+        <article><h2>&#34892;&#20026;&#25688;&#35201;</h2><pre id="behavior"></pre></article>
+        <article><h2>&#32593;&#31449;&#20998;&#26512;</h2><pre id="analysis"></pre></article>
+      </section>
+      <section>
+        <h2>&#25130;&#22270;</h2>
+        <div id="screenshots" class="shots"></div>
+      </section>
+    </main>
+  </body>
+</html>
