@@ -98,6 +98,10 @@ pnpm test:e2e
 
 `pnpm test:e2e` launches Chrome and loads the built extension from `dist`.
 
+## Community
+
+This project is published and discussed on [Linux.do](https://linux.do/)—[a sincere, friendly, united, and professional community for technical exchange](https://linux.do/).
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).

@@ -98,6 +98,10 @@ pnpm test:e2e
 
 `pnpm test:e2e` 会启动 Chrome，并加载 `dist` 中构建好的扩展。
 
+## 社区
+
+本项目在 [Linux.do](https://linux.do/) 发布与讨论——[一个真诚、友善、团结、专业的技术交流社区](https://linux.do/)。
+
 ## 许可证
 
 MIT。详见 [LICENSE](./LICENSE)。
