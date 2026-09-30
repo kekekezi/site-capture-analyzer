@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Site Capture Analyzer",
   "description": "Record website code, requests, storage, navigation, and user actions into an AI-ready sensitive evidence package.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "action": {
     "default_title": "Site Capture Analyzer",
     "default_popup": "popup.html",
@@ -26,12 +26,12 @@
   "permissions": [
     "activeTab",
     "cookies",
+    "debugger",
     "downloads",
     "scripting",
     "storage",
     "tabs",
-    "webNavigation",
-    "webRequest"
+    "webNavigation"
   ],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [

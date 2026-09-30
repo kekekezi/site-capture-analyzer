@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 dist/
+release/
 
 # Local capture exports and sensitive test output
 测试/

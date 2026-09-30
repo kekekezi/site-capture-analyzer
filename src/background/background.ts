@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { captureTextBody } from "../shared/body";
 import { createEvent, createSession, sortEvents } from "../shared/events";
 import { redactSensitive } from "../shared/redact";
 import type { CaptureEvent, CaptureLimits, CaptureSession, ExportMode, NetworkPayload, PopupState, RuntimeMessage, StopReason, UserActionPayload } from "../shared/types";
@@ -18,8 +19,8 @@ let lastActivityMs = Date.now();
 const tabUrls = new Map<number, string>();
 const screenshots: ScreenshotRecord[] = [];
 const lastScreenshotByTab = new Map<number, { timestampMs: number; url?: string }>();
-const requestStarts = new Map<string, number>();
-const requestRows = new Map<string, Partial<NetworkPayload>>();
+const debuggerTabs = new Set<number>();
+const cdpRequests = new Map<string, CdpRequestRecord>();
 
 interface ScreenshotRecord {
   id: string;
@@ -32,10 +33,59 @@ interface ScreenshotRecord {
   dataUrl: string;
 }
 
-interface WebRequestBody {
-  formData?: Record<string, unknown[]>;
-  raw?: Array<{ bytes?: ArrayBuffer; file?: string }>;
+interface CdpRequest {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  postData?: string;
+  hasPostData?: boolean;
 }
+
+interface CdpResponse {
+  url: string;
+  status: number;
+  statusText: string;
+  headers?: Record<string, string>;
+  mimeType?: string;
+}
+
+interface CdpRequestRecord {
+  tabId: number;
+  requestId: string;
+  method: string;
+  url: string;
+  type?: string;
+  requestHeaders?: Record<string, string>;
+  requestBody?: unknown;
+  statusCode?: number;
+  statusLine?: string;
+  responseHeaders?: Record<string, string>;
+  mimeType?: string;
+  wallTimeMs: number;
+  startTimestamp: number;
+}
+
+type CdpParams = Record<string, unknown>;
+
+const RESOURCE_TYPE_MAP: Record<string, string> = {
+  Document: "main_frame",
+  Stylesheet: "stylesheet",
+  Script: "script",
+  Image: "image",
+  Font: "font",
+  Media: "media",
+  XHR: "xhr",
+  Fetch: "fetch",
+  EventSource: "eventsource",
+  WebSocket: "websocket",
+  Manifest: "manifest",
+  Ping: "ping",
+  Preflight: "preflight",
+  Prefetch: "prefetch",
+  CSPReport: "csp_report",
+  SignedExchange: "signed_exchange",
+  Other: "other"
+};
 
 declare global {
   interface Window {
@@ -58,70 +108,221 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
   return true;
 });
 
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    if (!isRecordingTab(details.tabId)) return undefined;
-    requestStarts.set(details.requestId, details.timeStamp);
-    requestRows.set(details.requestId, {
-      requestId: details.requestId,
-      method: details.method,
-      url: details.url,
-      type: details.type,
-      requestBody: summarizeRequestBody(details.requestBody),
-      bodyCaptureStatus: "blocked_by_browser"
+// 网络采集使用 chrome.debugger（Chrome DevTools 协议），与 DevTools Network 面板同源，
+// 不向页面注入任何 fetch/XHR 钩子，因此不会触发站点风控（如易盾）的环境检测。
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source.tabId;
+  if (tabId === undefined || !isRecordingTab(tabId)) return;
+  try {
+    handleCdpEvent(tabId, method, params as CdpParams | undefined);
+  } catch (error) {
+    addEvent("runtime.error", { stage: "cdp-event", method, message: error instanceof Error ? error.message : String(error) }, { tabId });
+  }
+});
+
+chrome.debugger.onDetach.addListener((source) => {
+  if (source.tabId === undefined) return;
+  debuggerTabs.delete(source.tabId);
+  if (isRecordingTab(source.tabId)) {
+    addEvent("runtime.error", { stage: "debugger-detached", message: "Chrome 调试器已分离，网络采集停止（可能被用户取消或被其他工具占用）。" }, { tabId: source.tabId });
+  }
+});
+
+function handleCdpEvent(tabId: number, method: string, params: CdpParams | undefined): void {
+  if (!params) return;
+
+  if (method === "Network.requestWillBeSent") {
+    const request = params.request as CdpRequest;
+    const requestId = String(params.requestId);
+    const wallTimeMs = typeof params.wallTime === "number" ? params.wallTime * 1000 : Date.now();
+    const record: CdpRequestRecord = {
+      tabId,
+      requestId,
+      method: request.method,
+      url: request.url,
+      type: normalizeResourceType(params.type as string | undefined),
+      requestHeaders: { ...(request.headers ?? {}) },
+      wallTimeMs,
+      startTimestamp: typeof params.timestamp === "number" ? params.timestamp : wallTimeMs / 1000
+    };
+    cdpRequests.set(requestId, record);
+
+    const requestBody = request.postData !== undefined ? captureTextBody(request.postData) : undefined;
+    if (requestBody) record.requestBody = requestBody;
+
+    addEvent("network.request", toNetworkPayload(record), { tabId, url: record.url, timestampMs: wallTimeMs });
+
+    if (!requestBody && request.hasPostData) {
+      void fetchPostData(tabId, requestId);
+    }
+    return;
+  }
+
+  if (method === "Network.requestWillBeSentExtraInfo") {
+    const requestId = String(params.requestId);
+    const record = cdpRequests.get(requestId);
+    if (record) {
+      record.requestHeaders = { ...(params.headers as Record<string, string> | undefined), ...record.requestHeaders };
+    }
+    return;
+  }
+
+  if (method === "Network.responseReceived") {
+    const requestId = String(params.requestId);
+    const response = params.response as CdpResponse;
+    const record = getOrCreateCdpRecord(tabId, requestId, response.url);
+    record.statusCode = response.status;
+    record.statusLine = `${response.status} ${response.statusText}`.trim();
+    record.responseHeaders = { ...(response.headers ?? {}) };
+    record.mimeType = response.mimeType;
+    if (!record.type) record.type = normalizeResourceType(params.type as string | undefined);
+    return;
+  }
+
+  if (method === "Network.loadingFinished") {
+    const requestId = String(params.requestId);
+    const record = cdpRequests.get(requestId);
+    if (!record) return;
+    const timestampMs = cdpTimestampToMs(record, params.timestamp);
+    const encodedDataLength = typeof params.encodedDataLength === "number" ? params.encodedDataLength : undefined;
+    void (async () => {
+      let responseBody;
+      let bodyCaptureStatus: NetworkPayload["bodyCaptureStatus"] = "not_applicable";
+      try {
+        if (isTextualResponse(record) && (encodedDataLength === undefined || encodedDataLength === 0 || encodedDataLength < 10_000_000)) {
+          const body = (await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId })) as { body: string; base64: boolean } | undefined;
+          if (!body) throw new Error("empty response body");
+          responseBody = body.base64
+            ? decodeBase64Body(body.body, record.mimeType ?? record.responseHeaders?.["content-type"] ?? record.responseHeaders?.["Content-Type"])
+            : captureTextBody(body.body, record.mimeType);
+          bodyCaptureStatus = responseBody.truncated ? "truncated" : "captured";
+        } else {
+          bodyCaptureStatus = "blocked_by_browser";
+        }
+      } catch {
+        bodyCaptureStatus = "blocked_by_browser";
+      }
+      cdpRequests.delete(requestId);
+      addEvent(
+        "network.response",
+        {
+          ...toNetworkPayload(record),
+          responseBody,
+          bodyCaptureStatus,
+          durationMs: Math.max(0, Math.round(timestampMs - record.wallTimeMs))
+        },
+        { tabId: record.tabId, url: record.url, timestampMs }
+      );
+    })();
+    return;
+  }
+
+  if (method === "Network.loadingFailed") {
+    const requestId = String(params.requestId);
+    const record = getOrCreateCdpRecord(tabId, requestId, "");
+    const timestampMs = cdpTimestampToMs(record, params.timestamp);
+    cdpRequests.delete(requestId);
+    addEvent("network.error", { ...toNetworkPayload(record), error: String(params.errorText ?? "failed") }, { tabId, url: record.url, timestampMs });
+    return;
+  }
+}
+
+async function fetchPostData(tabId: number, requestId: string): Promise<void> {
+  const record = cdpRequests.get(requestId);
+  if (!record) return;
+  try {
+    const result = (await chrome.debugger.sendCommand({ tabId }, "Network.getRequestPostData", { requestId })) as { postData: string } | undefined;
+    if (result?.postData) record.requestBody = captureTextBody(result.postData);
+  } catch {
+    // 大请求体可能已被缓冲区丢弃，保持元信息即可
+  }
+}
+
+function getOrCreateCdpRecord(tabId: number, requestId: string, url: string): CdpRequestRecord {
+  let record = cdpRequests.get(requestId);
+  if (!record) {
+    record = {
+      tabId,
+      requestId,
+      method: "GET",
+      url,
+      wallTimeMs: Date.now(),
+      startTimestamp: Date.now() / 1000
+    };
+    cdpRequests.set(requestId, record);
+  }
+  return record;
+}
+
+function toNetworkPayload(record: CdpRequestRecord): Partial<NetworkPayload> {
+  return {
+    requestId: record.requestId,
+    method: record.method,
+    url: record.url,
+    type: record.type,
+    statusCode: record.statusCode,
+    statusLine: record.statusLine,
+    requestHeaders: record.requestHeaders,
+    responseHeaders: record.responseHeaders,
+    requestBody: record.requestBody
+  };
+}
+
+function normalizeResourceType(type: string | undefined): string | undefined {
+  if (!type) return undefined;
+  return RESOURCE_TYPE_MAP[type] ?? type.toLowerCase();
+}
+
+function isTextualResponse(record: CdpRequestRecord): boolean {
+  const contentType = `${record.mimeType ?? ""} ${record.responseHeaders?.["content-type"] ?? record.responseHeaders?.["Content-Type"] ?? ""}`;
+  return !/text\/event-stream|multipart\/x-mixed-replace/i.test(contentType);
+}
+
+function cdpTimestampToMs(record: CdpRequestRecord, timestamp: unknown): number {
+  if (typeof timestamp !== "number") return Date.now();
+  return record.wallTimeMs + Math.max(0, timestamp - record.startTimestamp) * 1000;
+}
+
+function decodeBase64Body(base64: string, contentType?: string): { contentType?: string | null; encoding: "text" | "base64"; value: string; truncated: boolean; originalLength: number } {
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const printable = text.replace(/[^\x09\x0a\x0d\x20-\x7e\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g, "");
+  if (printable.length >= text.length * 0.7) {
+    return captureTextBody(text, contentType);
+  }
+  return {
+    contentType,
+    encoding: "base64",
+    value: base64.slice(0, 1_000_000),
+    truncated: base64.length > 1_000_000,
+    originalLength: base64.length
+  };
+}
+
+async function attachDebugger(tabId: number): Promise<void> {
+  if (debuggerTabs.has(tabId)) return;
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    debuggerTabs.add(tabId);
+    await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
+      maxTotalBufferSize: 20_000_000,
+      maxResourceBufferSize: 10_000_000
     });
-    addEvent("network.request", requestRows.get(details.requestId), { tabId: details.tabId, frameId: details.frameId, url: details.url, timestampMs: details.timeStamp });
-    return undefined;
-  },
-  { urls: ["<all_urls>"] },
-  ["requestBody"]
-);
+  } catch (error) {
+    addEvent("runtime.error", { stage: "attachDebugger", message: `附加调试器失败，网络采集不可用：${error instanceof Error ? error.message : String(error)}` }, { tabId });
+  }
+}
 
-chrome.webRequest.onBeforeSendHeaders.addListener(
-  (details) => {
-    if (!isRecordingTab(details.tabId)) return undefined;
-    const row = requestRows.get(details.requestId) ?? { requestId: details.requestId, url: details.url };
-    row.requestHeaders = headersToRecord(details.requestHeaders);
-    requestRows.set(details.requestId, row);
-    return undefined;
-  },
-  { urls: ["<all_urls>"] },
-  ["requestHeaders", "extraHeaders"]
-);
-
-chrome.webRequest.onHeadersReceived.addListener(
-  (details) => {
-    if (!isRecordingTab(details.tabId)) return undefined;
-    const row = requestRows.get(details.requestId) ?? { requestId: details.requestId, url: details.url };
-    row.statusCode = details.statusCode;
-    row.statusLine = details.statusLine;
-    row.responseHeaders = headersToRecord(details.responseHeaders);
-    requestRows.set(details.requestId, row);
-    return undefined;
-  },
-  { urls: ["<all_urls>"] },
-  ["responseHeaders", "extraHeaders"]
-);
-
-chrome.webRequest.onCompleted.addListener(
-  (details) => {
-    if (!isRecordingTab(details.tabId)) return;
-    const row = requestRows.get(details.requestId) ?? { requestId: details.requestId, url: details.url };
-    row.statusCode = details.statusCode;
-    row.durationMs = Math.round(details.timeStamp - (requestStarts.get(details.requestId) ?? details.timeStamp));
-    addEvent("network.response", row, { tabId: details.tabId, frameId: details.frameId, url: details.url, timestampMs: details.timeStamp });
-  },
-  { urls: ["<all_urls>"] }
-);
-
-chrome.webRequest.onErrorOccurred.addListener(
-  (details) => {
-    if (!isRecordingTab(details.tabId)) return;
-    const row = requestRows.get(details.requestId) ?? { requestId: details.requestId, url: details.url };
-    addEvent("network.error", { ...row, error: details.error }, { tabId: details.tabId, frameId: details.frameId, url: details.url, timestampMs: details.timeStamp });
-  },
-  { urls: ["<all_urls>"] }
-);
+async function detachDebugger(tabId: number): Promise<void> {
+  if (!debuggerTabs.has(tabId)) return;
+  debuggerTabs.delete(tabId);
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch {
+    // 目标可能已关闭，忽略
+  }
+}
 
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (!isRecordingTab(details.tabId)) return;
@@ -200,13 +401,13 @@ async function startRecording(): Promise<PopupState> {
   tabUrls.set(tab.id, tab.url ?? "");
   screenshots.splice(0, screenshots.length);
   lastScreenshotByTab.clear();
-  requestStarts.clear();
-  requestRows.clear();
+  cdpRequests.clear();
   lastActivityMs = Date.now();
 
   await chrome.storage.session.set({ activeSession: session });
   startLimitTimer();
   void updateActionIndicator("recording");
+  await attachDebugger(tab.id);
   await ensureContentScript(tab.id);
   await chrome.tabs.sendMessage(tab.id, { source: "site-capture", command: "start-recording", session } satisfies RuntimeMessage).catch(() => undefined);
   await captureScreenshotForTab(tab.id, "session.started", tab.url);
@@ -224,6 +425,7 @@ async function stopRecordingWithReason(reason: StopReason): Promise<PopupState> 
   for (const tabId of tabIds) {
     await captureScreenshotForTab(tabId, "session.stopped", tabUrls.get(tabId));
     await chrome.tabs.sendMessage(tabId, { source: "site-capture", command: "stop-recording" } satisfies RuntimeMessage).catch(() => undefined);
+    await detachDebugger(tabId);
   }
   await captureCookies();
   session = { ...session, status: "stopped", stoppedAt: new Date().toISOString(), stopReason: reason, tabIds };
@@ -285,8 +487,10 @@ async function clearRecording(): Promise<PopupState> {
   tabUrls.clear();
   screenshots.splice(0, screenshots.length);
   lastScreenshotByTab.clear();
-  requestStarts.clear();
-  requestRows.clear();
+  cdpRequests.clear();
+  for (const tabId of tabIds) {
+    await detachDebugger(tabId);
+  }
   await chrome.storage.session.remove("activeSession");
   void updateActionIndicator("idle");
   for (const tabId of tabIds) {
@@ -410,26 +614,10 @@ async function trackTab(tabId: number, url?: string): Promise<void> {
   trackedTabIds.add(tabId);
   session.tabIds = Array.from(trackedTabIds);
   if (url) tabUrls.set(tabId, url);
+  await attachDebugger(tabId);
   await ensureContentScript(tabId);
   await chrome.tabs.sendMessage(tabId, { source: "site-capture", command: "start-recording", session } satisfies RuntimeMessage).catch(() => undefined);
   await captureScreenshotForTab(tabId, "tab.tracked", url);
-}
-
-function headersToRecord(headers?: chrome.webRequest.HttpHeader[]): Record<string, string> {
-  return Object.fromEntries((headers ?? []).map((header) => [header.name, header.value ?? String(header.binaryValue ?? "")]));
-}
-
-function summarizeRequestBody(body?: WebRequestBody): unknown {
-  if (!body) return undefined;
-  if (body.formData) return body.formData;
-  if (body.raw) {
-    return body.raw.map((part) => ({
-      bytes: part.bytes?.byteLength,
-      file: part.file,
-      note: "Chrome webRequest exposes raw body bytes but MV3 service worker export stores byte lengths only here; injected fetch/XHR captures readable page bodies."
-    }));
-  }
-  return undefined;
 }
 
 async function captureCookies(): Promise<void> {

@@ -1,6 +1,6 @@
 {
   "name": "site-capture-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A local Chrome/Edge extension for recording website sessions, network activity, storage, screenshots, and user behavior into an exportable analysis package.",
   "license": "MIT",

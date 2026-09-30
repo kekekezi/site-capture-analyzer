@@ -16,25 +16,25 @@ if (!window.__siteCaptureContentLoaded) {
 }
 
 function boot(): void {
-injectMainWorldScript();
+  sendRuntimeMessage({ source: "site-capture", command: "content-ready" } satisfies RuntimeMessage);
 
-sendRuntimeMessage({ source: "site-capture", command: "content-ready" } satisfies RuntimeMessage);
-
-chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
-  if (message.source !== "site-capture") return undefined;
-  if (message.command === "start-recording") {
-    if (message.session) {
-      activeSession = message.session;
-      startCapture();
-      return undefined;
-    }
-    chrome.storage.session.get("activeSession").then(({ activeSession: session }) => {
-      if (session) {
-        activeSession = session as CaptureSession;
+  chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
+    if (message.source !== "site-capture") return undefined;
+    if (message.command === "start-recording") {
+      if (message.session) {
+        activeSession = message.session;
+        ensureMainWorldInjected();
         startCapture();
+        return undefined;
       }
-    }).catch(() => undefined);
-  }
+      chrome.storage.session.get("activeSession").then(({ activeSession: session }) => {
+        if (session) {
+          activeSession = session as CaptureSession;
+          ensureMainWorldInjected();
+          startCapture();
+        }
+      }).catch(() => undefined);
+    }
   if (message.command === "stop-recording") {
     flushMutations();
     if (activeSession) {
@@ -63,6 +63,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
 chrome.storage.session.get("activeSession").then(({ activeSession: session }) => {
   if (session) {
     activeSession = session as CaptureSession;
+    ensureMainWorldInjected();
     startCapture();
   }
 }).catch(() => undefined);
@@ -242,6 +243,15 @@ function nodeSummary(node: Node): Record<string, unknown> {
 function contextTextForElement(element: Element): string {
   const nearest = element.closest("a, button, label, li, form, section, article, div") ?? element;
   return (nearest.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 1000);
+}
+
+let mainWorldInjected = false;
+
+// 仅在录制会话激活后才注入 fetch/XHR 等 hook，避免未录制时影响页面
+function ensureMainWorldInjected(): void {
+  if (mainWorldInjected) return;
+  mainWorldInjected = true;
+  injectMainWorldScript();
 }
 
 function injectMainWorldScript(): void {

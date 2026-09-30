@@ -20,7 +20,7 @@ Site Capture Analyzer is a local Chrome/Edge extension for recording website ana
 
 - Record page snapshots and DOM mutations.
 - Capture user actions such as clicks, input, scroll, focus, paste, submit, and key events.
-- Capture network request/response metadata and page-visible fetch/XHR bodies.
+- Capture network requests/responses including headers, request bodies, and response bodies. Collected via the Chrome DevTools protocol with zero page hooks, so target sites are never disturbed and anti-bot detection is not triggered.
 - Capture `localStorage`, `sessionStorage`, and cookies.
 - Track navigation and tabs opened from a recorded page.
 - Capture screenshots during key moments.
@@ -51,7 +51,7 @@ Then refresh the extension in `chrome://extensions/`.
 
 1. Open the target website.
 2. Click the extension icon.
-3. Click `开始` to start recording.
+3. Click `开始` to start recording. While recording, Chrome shows a "started debugging this browser" infobar — this is expected behavior of network capture (Chrome DevTools protocol). Do not click "Cancel", or network recording will stop.
 4. Perform the actions you want to analyze.
 5. Click `停止`, or let auto-stop protection stop recording.
 6. Click `导出` to download the ZIP package.
